@@ -115,7 +115,7 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         new_item: The listing dict for the thrifted item.
 
     Returns:
-        A 2–4 sentence string usable as an Instagram/TikTok caption.
+        A 2 - 4 sentence string usable as an Instagram/TikTok caption.
         If outfit is empty or missing, return a descriptive error message
         string — do NOT raise an exception.
 
