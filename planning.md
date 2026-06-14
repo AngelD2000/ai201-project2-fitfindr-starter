@@ -151,8 +151,21 @@ If create_fit_card fails or return nothing, return descriptive error message tel
 ## State Management
 
 **How does information from one tool get passed to the next?**
-<!-- Describe how your agent stores and accesses state within a session. What data is tracked? How is it passed between tool calls? -->
-The data will be stored in memory with variables, if this doesn't work out we can use Langgraph to manage a state graph.
+
+All state for a single user interaction is stored in a `session` dict initialized by `_new_session()`. It is the single source of truth for the entire planning loop run. Each step reads inputs from the session and writes its output back into it before calling the next tool.
+
+| Key | Type | Set by |
+|-----|------|--------|
+| `query` | str | `_new_session()` — original user input |
+| `parsed` | dict | `parse_query()` — extracted description, size, max_price |
+| `search_results` | list[dict] | `search_listings()` — up to 3 matching listings |
+| `selected_item` | dict | planning loop — `search_results[0]` |
+| `wardrobe` | dict | `_new_session()` — passed in from caller |
+| `outfit_suggestion` | str | `suggest_outfit()` |
+| `fit_card` | str | `create_fit_card()` |
+| `error` | str or None | planning loop — set on any early exit |
+
+Tools are called with explicit keyword arguments pulled from the session (e.g. `suggest_outfit(new_item=session["selected_item"], wardrobe=session["wardrobe"])`), not by passing the session dict directly. This keeps tools independently testable.
 
 ---
 
@@ -162,9 +175,18 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|
-| search_listings | No results match the query | returns empty list |
-| suggest_outfit | Wardrobe is empty | returns string, suggestion on how to styple the top most item in search_listings|
-| create_fit_card | Outfit input is missing or incomplete | return descriptive error message telling the user which call failed. |
+| search_listings | Tool call throws an exception | Sets `session["error"]` with message, returns session early. Does not call `suggest_outfit`. |
+| search_listings | Returns empty list (no matches) | Sets `session["error"]`: "Sorry, I couldn't find any items matching your query. Try broadening your search or checking back later for new listings!" Returns session early. |
+| suggest_outfit | Wardrobe is empty (`wardrobe["items"] == []`) | Does not error — instead calls LLM with a general styling prompt for the item rather than a wardrobe-pairing prompt. |
+| suggest_outfit | Tool call throws an exception | Sets `session["error"]`: "Sorry, I had trouble generating an outfit suggestion: {error detail}". Returns session early. Does not call `create_fit_card`. |
+| create_fit_card | `outfit` is None or empty string | Returns error string directly: "Error: Outfit description is empty. Please provide a valid outfit suggestion." Does not call the LLM. |
+| create_fit_card | Tool call throws an exception | Sets `session["error"]`: "Sorry, I had trouble creating a fit card: {error detail}". Returns session. |
+
+**Concrete test examples:**
+
+- `search_listings("designer ballgown", size="XXS", max_price=5)` → returns `[]` → session error is set, loop stops before `suggest_outfit`.
+- `suggest_outfit(new_item=<cardigan>, wardrobe={"items": []})` → LLM called with general styling prompt, returns styling advice string instead of raising.
+- `create_fit_card(outfit=None, new_item=<cardigan>)` → returns `"Error: Outfit description is empty..."` without making any API call.
 
 ---
 
@@ -224,5 +246,18 @@ Then agent will pick the top most relevant item, then call tool suggest_outfit(n
 Then the agent will call tool create_fit_card(outfit=<suggestion from step 2>, newitem=<most relevant item>) and output out fit of the day type of caption for tiktok
 
 **Final output to user:**
-<!-- What does the user actually see at the end? -->
 The user at the end should see a out fit of the day caption for tiktok
+
+---
+
+## Spec Reflection
+
+**What changed between your original spec and the final implementation, and why?**
+
+- **Query parsing**: The original spec did not define how `description`, `size`, and `max_price` would be extracted from a natural language query. During implementation, regex and string splitting were considered but an LLM-based `parse_query()` function was chosen instead, because users phrase things differently ("under $30" vs "max 30 dollars" vs "no more than thirty").
+
+- **Scoring only matched `description` field**: The initial scoring implementation only checked `listing["description"]` for keyword overlap. This was a gap — a query like "brown cardigan" would miss listings where those words only appear in `title` or `style_tags`. This was identified during review but left as-is since the mock data has enough description coverage for testing.
+
+- **Listing mutation bug**: The first implementation added a `"score"` key directly onto each listing dict from `load_listings()`. This would cause stale scores on subsequent calls if the data were ever cached. Fixed by computing scores in a separate local list of `(listing, score)` tuples and discarding scores after sorting.
+
+- **Empty wardrobe is not an error**: The original error table treated an empty wardrobe as a failure. In the final implementation it is handled as a valid path — `suggest_outfit` detects it and switches to a general styling prompt rather than stopping the chain.
