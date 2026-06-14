@@ -261,3 +261,25 @@ The user at the end should see a out fit of the day caption for tiktok
 - **Listing mutation bug**: The first implementation added a `"score"` key directly onto each listing dict from `load_listings()`. This would cause stale scores on subsequent calls if the data were ever cached. Fixed by computing scores in a separate local list of `(listing, score)` tuples and discarding scores after sorting.
 
 - **Empty wardrobe is not an error**: The original error table treated an empty wardrobe as a failure. In the final implementation it is handled as a valid path — `suggest_outfit` detects it and switches to a general styling prompt rather than stopping the chain.
+
+---
+
+## AI Usage
+
+**Describe at least 2 specific instances where you used an AI tool during implementation.**
+
+**Instance 1 — Validating the planning loop logic**
+
+Input given to Claude: The full Planning Loop section of this document (the ordered list of tool calls and error branches).
+
+What it produced: Claude identified that the empty wardrobe check was placed out of order — it appeared after the `suggest_outfit` error handling, but in execution order it happens before `suggest_outfit` is called. Claude suggested restructuring the description to match execution order exactly.
+
+What was changed: The planning loop section was reordered so the empty wardrobe branch appears immediately after the `search_listings` success branch, before `suggest_outfit` is introduced. The underlying logic was not changed, only the ordering of the description.
+
+**Instance 2 — Catching the listing mutation bug**
+
+Input given to Claude: The `search_listings()` implementation that used `listing["score"] = ...` to attach scores directly to listing dicts.
+
+What it produced: Claude flagged that mutating the original dicts from `load_listings()` would cause stale scores on subsequent calls if the data were ever cached, and suggested computing scores in a separate `(listing, score)` tuple list instead.
+
+What was changed: Replaced the in-place mutation with a local `scored` list of tuples. The original listing dicts are never modified. The sort and top-3 cap logic was kept the same.
