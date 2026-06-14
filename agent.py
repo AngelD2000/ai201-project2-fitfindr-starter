@@ -18,8 +18,10 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
-from tools import search_listings, suggest_outfit, create_fit_card
+import json
 
+from tools import _get_groq_client, search_listings, suggest_outfit, create_fit_card
+import re
 
 # ── session state ─────────────────────────────────────────────────────────────
 
@@ -92,11 +94,73 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    #Step 2
+    session["parsed"] = parse_query(query)
+    
+
+    try:
+    # Step 3
+        session["search_results"] = search_listings(
+            description=session["parsed"]["description"],
+            size=session["parsed"]["size"],
+            max_price=session["parsed"]["max_price"],
+        )
+    except Exception as e:
+        session["error"] = f"Sorry, I had trouble searching listings: {str(e)}"
+        return session
+
+    if len(session["search_results"]) == 0:
+        session["error"] = "Sorry, I couldn't find any items matching your query. Try broadening your search or checking back later for new listings!"
+        return session
+
+    # Step 4
+    session["selected_item"] = session["search_results"][0]
+
+    # Step 5
+    try:
+        session["outfit_suggestion"] = suggest_outfit(
+            new_item=session["selected_item"],
+            wardrobe=session["wardrobe"],
+        )
+
+    except Exception as e:
+        session["error"] = f"Sorry, I had trouble generating an outfit suggestion: {str(e)}"
+        return session
+
+    # Step 6
+
+    try:
+        session["fit_card"] = create_fit_card(
+            outfit=session["outfit_suggestion"],
+            new_item=session["selected_item"],
+        )
+    except Exception as e:
+        session["error"] = f"Sorry, I had trouble creating a fit card: {str(e)}"
+    
     return session
 
+def parse_query(query: str) -> dict:
+    client = _get_groq_client()
+    prompt = f"Parse the user query to extract a description, size and max_price. User query: {query}. Return a JSON object with keys 'description', 'size', and 'max_price'. If any of these are not specified in the query, set their value to null. DO NOT return with ```json formatting, only return the raw JSON object."
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=200,
+        temperature=0.0,  # deterministic parsing
+    )
+    parsed_response = response.choices[0].message.content.strip()
+    match = re.search(r"```json\s*(\{.*\})\s*```", parsed_response, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+    else: 
+        json_str = parsed_response
+    
+    return json.loads(json_str)
 
 # ── CLI test ──────────────────────────────────────────────────────────────────
 
